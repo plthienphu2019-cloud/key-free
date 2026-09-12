@@ -99,6 +99,11 @@ h1 {
 .timer-value.expired {
     color: #ff4757;
 }
+.timer-note {
+    font-size: 11px;
+    opacity: 0.6;
+    margin-top: 5px;
+}
 .btn {
     width: 100%;
     padding: 16px;
@@ -115,6 +120,11 @@ h1 {
 .btn:hover {
     transform: translateY(-2px);
     box-shadow: 0 10px 30px rgba(255,215,0,0.4);
+}
+.btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+    transform: none;
 }
 .btn-copy {
     background: rgba(255,255,255,0.2);
@@ -148,19 +158,20 @@ h1 {
     </div>
 
     <h1>🎁 WEB KEY</h1>
-    <p class="subtitle">Lấy key free mỗi ngày — tự cập nhật</p>
+    <p class="subtitle">Lấy key free 24h — mỗi ngày 1 key</p>
 
     <button class="btn" id="getKeyBtn">🔑 LẤY KEY FREE</button>
 
     <div id="keyDisplay" style="display:none;">
         <div class="key-box">
-            <div class="key-type">KEY FREE HÔM NAY</div>
+            <div class="key-type">KEY FREE</div>
             <div class="key-value" id="keyValue">---</div>
         </div>
 
         <div class="timer">
             <div class="timer-label">⏰ KEY CÒN HIỆU LỰC</div>
             <div class="timer-value" id="timerValue">--:--:--</div>
+            <div class="timer-note" id="timerNote"></div>
         </div>
 
         <button class="btn btn-copy" id="copyBtn">📋 COPY KEY</button>
@@ -168,13 +179,14 @@ h1 {
 
     <div class="status" id="status"></div>
 
-    <div class="footer">Key tự động reset khi qua ngày mới</div>
+    <div class="footer">Key có hiệu lực 24 giờ kể từ lúc lấy</div>
 </div>
 
 <script>
 // ============================================
 // CẤU HÌNH
 // ============================================
+const KEY_DURATION = 24 * 3600 * 1000;  // 24 giờ
 const STORAGE_KEY = "tphudz_free_key";
 
 // ============================================
@@ -201,12 +213,10 @@ updateDate();
 // SINH KEY: 3 SỐ + 5 CHỮ
 // ============================================
 function genKey() {
-    // 3 số
     let digits = "";
     for (let i = 0; i < 3; i++) {
         digits += Math.floor(Math.random() * 10);
     }
-    // 5 chữ (A-Z)
     const chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
     let letters = "";
     for (let i = 0; i < 5; i++) {
@@ -228,14 +238,10 @@ function loadKey() {
         if (!raw) return null;
         const data = JSON.parse(raw);
 
-        // Reset nếu qua ngày mới
-        const today = new Date().toDateString();
-        if (data.dateStr !== today) {
-            localStorage.removeItem(STORAGE_KEY);
-            return null;
-        }
-
+        // Nếu còn hạn → trả về
         if (data.expires > Date.now()) return data;
+
+        // Hết hạn → xoá
         localStorage.removeItem(STORAGE_KEY);
     } catch(e) {}
     return null;
@@ -256,26 +262,37 @@ function formatTime(ms) {
     return `${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(sec).padStart(2,'0')}`;
 }
 
-function getEndOfDay() {
-    // Hết ngày hôm nay (23:59:59)
-    const end = new Date();
-    end.setHours(23, 59, 59, 999);
-    return end.getTime();
+function formatDateTime(ts) {
+    const d = new Date(ts);
+    const day = String(d.getDate()).padStart(2, "0");
+    const mon = String(d.getMonth() + 1).padStart(2, "0");
+    const h = String(d.getHours()).padStart(2, "0");
+    const m = String(d.getMinutes()).padStart(2, "0");
+    return `${h}:${m} ${day}/${mon}`;
 }
 
 function updateTimer() {
     if (!currentKey) return;
     const remaining = currentKey.expires - Date.now();
     const timerEl = document.getElementById("timerValue");
+    const noteEl = document.getElementById("timerNote");
 
     if (remaining <= 0) {
         timerEl.textContent = "HẾT HẠN";
         timerEl.classList.add("expired");
+        noteEl.textContent = "Bạn có thể lấy key mới";
         clearInterval(timerInterval);
+
+        // Bật lại nút
+        const btn = document.getElementById("getKeyBtn");
+        btn.disabled = false;
+        btn.textContent = "🔑 LẤY KEY MỚI";
+
         showStatus("⏰ Key đã hết hạn. Lấy key mới!", "error");
     } else {
         timerEl.textContent = formatTime(remaining);
         timerEl.classList.remove("expired");
+        noteEl.textContent = `Hết hạn lúc ${formatDateTime(currentKey.expires)}`;
     }
 }
 
@@ -301,7 +318,7 @@ function showStatus(msg, type = "") {
 document.getElementById("getKeyBtn").addEventListener("click", () => {
     const existing = loadKey();
     if (existing) {
-        showStatus("⚠️ Bạn đã lấy key hôm nay rồi!", "error");
+        showStatus("⚠️ Bạn đang có key còn hiệu lực!", "error");
         showKey(existing);
         return;
     }
@@ -310,13 +327,12 @@ document.getElementById("getKeyBtn").addEventListener("click", () => {
     const data = {
         key: key,
         created: Date.now(),
-        expires: getEndOfDay(),   // Hết ngày hôm nay
-        dateStr: new Date().toDateString(),
+        expires: Date.now() + KEY_DURATION,   // 24 giờ từ lúc lấy
     };
 
     saveKey(data);
     showKey(data);
-    showStatus("✅ Đã lấy key thành công!", "success");
+    showStatus("✅ Đã lấy key thành công! Có hiệu lực 24h.", "success");
 });
 
 // ============================================
