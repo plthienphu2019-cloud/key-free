@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
-# PLP FREE KEY SERVER — Link4m Gate + Neon UI + Device-Bound 20min Key
-from __future__ import annotations
-import os, time, random, hashlib, sqlite3
+# PLP FREE KEY SERVER — Link4m verify + Neon UI + Key 24h
+import os, time, random, hashlib, sqlite3, requests
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from flask import Flask, request, jsonify, render_template_string
@@ -9,14 +8,9 @@ from flask import Flask, request, jsonify, render_template_string
 app = Flask(__name__)
 VN_TZ = ZoneInfo("Asia/Ho_Chi_Minh")
 DB_PATH = os.environ.get("DB_PATH", "freekey.db")
-SESSION_MINUTES = 20
+KEY_DURATION_HOURS = 24
 SERVER_SECRET = os.environ.get("SERVER_SECRET", "plp-free-2026")
-LINK4M_TOKEN = os.environ.get("LINK4M_TOKEN", "68f4489e3ae4c02c3e2ea54c")
-LINK4M_API = "https://link4m.co/api-shorten/v2"
 
-# ============================================================
-# DB
-# ============================================================
 def init_db():
     conn = sqlite3.connect(DB_PATH); c = conn.cursor()
     c.execute("""CREATE TABLE IF NOT EXISTS keys (
@@ -46,9 +40,6 @@ def gen_key():
 def device_hash(dev: str) -> str:
     return hashlib.sha256(f"{dev}|{SERVER_SECRET}".encode()).hexdigest()[:32]
 
-# ============================================================
-# LOGIC
-# ============================================================
 def is_unlocked(device_id: str) -> bool:
     if not device_id: return False
     h = device_hash(device_id)
@@ -76,7 +67,8 @@ def get_key_for_device(device_id: str):
 
 def create_key_for_device(device_id: str) -> dict:
     h = device_hash(device_id)
-    k = gen_key(); now = ms_now(); exp = now + SESSION_MINUTES * 60 * 1000
+    k = gen_key(); now = ms_now()
+    exp = now + KEY_DURATION_HOURS * 3600 * 1000
     conn = get_db(); c = conn.cursor()
     c.execute("DELETE FROM keys WHERE device_id=?", (h,))
     c.execute("""INSERT INTO keys (device_id, key, created_at, expires_at, day)
@@ -87,6 +79,9 @@ def create_key_for_device(device_id: str) -> dict:
 # ============================================================
 # LINK4M — tạo link vượt dẫn về /verify
 # ============================================================
+LINK4M_TOKEN = os.environ.get("LINK4M_TOKEN", "68f4489e3ae4c02c3e2ea54c")
+LINK4M_API = "https://link4m.co/api-shorten/v2"
+
 def link4m_shorten(url: str) -> str:
     try:
         r = requests.get(LINK4M_API, params={"api": LINK4M_TOKEN, "url": url}, timeout=15)
@@ -98,10 +93,10 @@ def link4m_shorten(url: str) -> str:
             if isinstance(v, str) and v.startswith("http"): return v
     except Exception as e:
         print("link4m error:", e)
-    return url   # fallback
+    return url
 
 # ============================================================
-# UI HTML
+# UI
 # ============================================================
 NEON = """
 <style>
@@ -188,9 +183,7 @@ async function verify(){
       document.getElementById('tag').className = 'tag warn';
       document.getElementById('msg').textContent = j.error || 'KHÔNG HỢP LỆ';
     }
-  } catch(e){
-    document.getElementById('msg').textContent = 'LỖI KẾT NỐI';
-  }
+  } catch(e){ document.getElementById('msg').textContent = 'LỖI KẾT NỐI'; }
 }
 verify();
 </script></body></html>"""
@@ -208,7 +201,7 @@ KEY_PAGE = """<!DOCTYPE html><html lang="vi"><head><meta charset="UTF-8">
   </div>
   <div id="actions"></div>
   <div class="footer">
-    ⚡ Key sống <b>20 phút</b><br>
+    ⚡ Key sống <b>24 giờ</b> kể từ khi nhập vào tool<br>
     🔒 Gắn cứng với thiết bị — không share được
   </div>
 </div>
@@ -222,15 +215,19 @@ let currentEnd = 0, tick = null;
 const device = new URL(location.href).searchParams.get('device') || '';
 
 function fmt(n){ return String(n).padStart(2,'0'); }
-function rtime(ms){ if(ms<=0) return '00:00'; const s=Math.floor(ms/1000);
-  return fmt(Math.floor(s/60))+':'+fmt(s%60); }
-
+function rtime(ms){
+  if (ms <= 0) return '00:00:00';
+  const s = Math.floor(ms / 1000);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const ss = s % 60;
+  return fmt(h)+':'+fmt(m)+':'+fmt(ss);
+}
 async function load(){
   if (!device){
     box.className='keybox empty';
     tagEl.textContent='THIẾU DEVICE'; tagEl.className='tag warn';
-    keyEl.textContent='MỞ LẠI TỪ TOOL';
-    actionsEl.innerHTML=''; return;
+    keyEl.textContent='MỞ LẠI TỪ TOOL'; actionsEl.innerHTML=''; return;
   }
   const r = await fetch('/api/key?device=' + encodeURIComponent(device), {cache:'no-store'});
   const j = await r.json();
@@ -239,15 +236,14 @@ async function load(){
     box.className='keybox empty';
     tagEl.textContent='CHƯA VƯỢT LINK'; tagEl.className='tag warn';
     keyEl.textContent='BẠN CẦN VƯỢT LINK ĐỂ LẤY KEY';
-    actionsEl.innerHTML='<button onclick="location.href=\\'/\\'">QUAY LẠI</button>';
-    return;
+    actionsEl.innerHTML=''; return;
   }
   if (j.status === 'active'){
     box.className='keybox active';
     tagEl.textContent='● KEY HOẠT ĐỘNG'; tagEl.className='tag ok';
     keyEl.textContent=j.key;
     currentEnd = j.expires_at;
-    timerEl.innerHTML = '⏱️ Còn lại: <b id="cd">--:--</b>';
+    timerEl.innerHTML = '⏱️ Còn lại: <b id="cd">--:--:--</b>';
     actionsEl.innerHTML =
       '<button class="btn-copy" onclick="copyKey()">📋 COPY KEY</button>' +
       '<button class="btn-reload" style="margin-top:10px" onclick="location.reload()">🔄 LÀM MỚI</button>';
@@ -270,8 +266,8 @@ async function load(){
   if (j.status === 'expired'){
     box.className='keybox empty';
     tagEl.textContent='● KEY HẾT HẠN'; tagEl.className='tag warn';
-    keyEl.textContent='NHẤN LÀM MỚI ĐỂ LẤY KEY MỚI';
-    actionsEl.innerHTML='<button class="btn-reload" onclick="location.reload()">🔄 LÀM MỚI</button>';
+    keyEl.textContent='VƯỢT LINK LẠI ĐỂ LẤY KEY MỚI';
+    actionsEl.innerHTML='';
     return;
   }
   box.className='keybox empty';
@@ -307,11 +303,10 @@ def verify_page():
 
 @app.route("/api/create-link")
 def api_create_link():
-    """Tool gọi endpoint này để nhận link vượt qua Link4m."""
+    """Tool gọi để nhận link vượt qua Link4m."""
     device = request.args.get("device", "").strip()
     if not device:
         return jsonify({"ok": False, "error": "missing device"}), 400
-    # link đích sau khi vượt link4m → sẽ vào /verify?device=xxx
     base = request.url_root.rstrip("/")
     target = f"{base}/verify?device={device}"
     short = link4m_shorten(target)
@@ -319,7 +314,7 @@ def api_create_link():
 
 @app.route("/api/verify-unlock")
 def api_verify_unlock():
-    """Sau khi user vượt link4m → Link4m redirect về đây → đánh dấu unlocked."""
+    """Sau khi user vượt link4m → redirect về đây → đánh dấu unlocked."""
     device = request.args.get("device", "").strip()
     if not device:
         return jsonify({"ok": False, "error": "missing device"}), 400
@@ -329,12 +324,8 @@ def api_verify_unlock():
 @app.route("/api/key")
 def api_key():
     device = request.args.get("device", "").strip()
-    if not device:
-        return jsonify({"status": "locked"})
-
-    if not is_unlocked(device):
-        return jsonify({"status": "locked"})
-
+    if not device: return jsonify({"status": "locked"})
+    if not is_unlocked(device): return jsonify({"status": "locked"})
     row = get_key_for_device(device)
     if row:
         return jsonify({"status": "active", "key": row["key"],
@@ -376,5 +367,4 @@ def health():
 
 init_db()
 if __name__ == "__main__":
-    import requests
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)), debug=False)
